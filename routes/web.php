@@ -25,5 +25,7 @@ Route::middleware( 'auth' )->group(
 );
 
 Route::post( '/csv/upload', array( CsvController::class, 'upload' ) )->name( 'csv.upload' );
+Route::get( '/csv/{id}/map', array( CsvController::class, 'showMapping' ) )->name( 'csv.map' );
+Route::post( '/csv/{id}/map', array( CsvController::class, 'saveMapping' ) )->name( 'csv.save-mapping' );
 
 require __DIR__ . '/auth.php';
