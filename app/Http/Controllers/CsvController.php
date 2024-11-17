@@ -7,182 +7,409 @@ use App\Models\CsvEntry;
 use App\Models\CsvColumnMapping;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+use Inertia\Inertia;
 
 /**
- * Controller for handling CSV file uploads and processing
+ * Controller for handling CSV file operations
+ * Manages upload, viewing, mapping, and processing of CSV files
  */
-class CsvController extends Controller {
+class CsvController extends Controller
+{
+    /*
+    |--------------------------------------------------------------------------
+    | Display Methods
+    |--------------------------------------------------------------------------
+    */
 
-	/**
-	 * Handles the upload of a CSV file
-	 *
-	 * @param Request $request The incoming HTTP request.
-	 * @return \Illuminate\Http\RedirectResponse
-	 */
-	public function upload( Request $request ) {
-		// 1. Validate the uploaded file
-		$request->validate(
-			array(
-				'csv_file' => 'required|mimes:csv,txt|max:2048',
-			)
-		);
+    /**
+     * Display a list of all uploaded CSV files
+     * Route: GET /dashboard
+     *
+     * @return \Illuminate\View\View
+     */
+    public function index()
+    {
+        $csv_files = CsvFile::with('entries')
+            ->latest()
+            ->get();
 
-		try {
-			DB::beginTransaction();
+        return view('dashboard', compact('csv_files'));
+    }
 
-			$file = $request->file( 'csv_file' );
+    /**
+     * Display a specific CSV file and its entries
+     * Route: GET /csv/{id}/view
+     *
+     * @param  int  $id  The ID of the CSV file
+     * @return \Inertia\Response
+     */
+    public function show($id)
+    {
+        $csv_file = CsvFile::with(['entries.categories'])->findOrFail($id);
+        $entries = $csv_file->entries;
+        $categories = \App\Models\Category::all();
 
-			// Store the file in the private directory
-			$filename = $file->store( 'csv_files', 'local' );
+        // Debug categories
+        Log::info('Categories loaded:', ['count' => $categories->count(), 'categories' => $categories->toArray()]);
 
-			// Create CSV File record with the full path
-			$csv_file = CsvFile::create(
-				array(
-					'filename'          => $filename,
-					'original_filename' => $file->getClientOriginalName(),
-					'is_mapped'         => false,
-				)
-			);
+        // Group entries by type if type exists
+        $groupedEntries = $entries->groupBy('type');
+        
+        return Inertia::render('Csv/View', [
+            'entries' => $groupedEntries->count() ? $groupedEntries : $entries,
+            'groupedByType' => $groupedEntries->count() > 0,
+            'csvFileId' => $id,
+            'categories' => $categories
+        ]);
+    }
 
-			// Read headers
-			$csv_data = array_map( 'str_getcsv', file( $file->getPathname() ) );
-			$headers  = array_shift( $csv_data );
+    /**
+     * Show the column mapping interface
+     * Route: GET /csv/{id}/map
+     *
+     * @param  int  $id
+     * @return \Inertia\Response
+     */
+    public function showMapping($id)
+    {
+        $csv_file = CsvFile::with('columnMappings')->findOrFail($id);
+        
+        // Get existing mappings
+        $existingMappings = $csv_file->columnMappings()
+            ->where('mapping_type', 'column')
+            ->pluck('maps_to', 'column_name')
+            ->toArray();
 
-			// Store the headers for later mapping
-			$csv_file->update(
-				array(
-					'headers' => $headers,
-				)
-			);
+        return Inertia::render('Csv/Map', [
+            'auth' => [
+                'user' => auth()->user(),
+            ],
+            'csvFile' => [
+                'id' => $csv_file->id,
+                'headers' => $csv_file->headers,
+                'existingMappings' => $existingMappings
+            ],
+            'errors' => session('errors') ? session('errors')->getBag('default')->getMessages() : (object)[],
+        ]);
+    }
 
-			DB::commit();
+    /**
+     * Save the column mappings and process the CSV
+     * Route: POST /csv/{id}/map
+     *
+     * @param  Request  $request
+     * @param  int  $id
+     * @return \Illuminate\Http\RedirectResponse
+     */
+    public function saveMapping(Request $request, $id)
+    {
+        $csv_file = CsvFile::findOrFail($id);
+        
+        // Validate required fields
+        $mappings = $request->input('mappings');
+        $requiredFields = ['date', 'amount', 'description'];
+        $selectedFields = array_values($mappings);
+        
+        $missingFields = array_diff($requiredFields, $selectedFields);
+        if (!empty($missingFields)) {
+            return back()->withErrors([
+                'mappings' => 'The following fields are required: ' . implode(', ', $missingFields)
+            ]);
+        }
 
-			// Redirect to mapping page
-			return redirect()
-				->route( 'csv.map', $csv_file->id )
-				->with( 'success', 'Please map the CSV columns' );
+        try {
+            DB::beginTransaction();
 
-		} catch ( \Exception $e ) {
-			DB::rollBack();
-			return redirect()
-				->back()
-				->with( 'error', 'Error uploading CSV: ' . $e->getMessage() );
-		}
-	}
+            // Store existing entries with their categories
+            $existingEntries = $csv_file->entries()
+                ->with('categories')
+                ->get()
+                ->mapWithKeys(function ($entry) {
+                    // Create a unique key based on description and amount
+                    $key = md5($entry->description . '|' . $entry->amount);
+                    return [$key => $entry->categories->pluck('id')->toArray()];
+                });
 
-	/**
-	 * Displays a list of uploaded CSV files
-	 *
-	 * @return \Illuminate\View\View
-	 */
-	public function index() {
-		$csv_files = CsvFile::with( 'entries' )
-			->latest()
-			->get();
+            // Delete existing column mappings and entries
+            $csv_file->columnMappings()->where('mapping_type', 'column')->delete();
+            $csv_file->entries()->delete();
 
-		return view( 'dashboard', compact( 'csv_files' ) );
-	}
+            // Save the new mappings
+            foreach ($mappings as $header => $field) {
+                if (empty($field)) continue;
+                
+                CsvColumnMapping::create([
+                    'csv_file_id' => $csv_file->id,
+                    'column_name' => $header,
+                    'maps_to' => $field,
+                    'mapping_type' => 'column'
+                ]);
+            }
 
-	public function showMapping( $id ) {
-		$csv_file = CsvFile::findOrFail( $id );
+            // Read and process the CSV file
+            if (!Storage::disk('private')->exists($csv_file->filename)) {
+                throw new \Exception('CSV file not found: ' . $csv_file->filename);
+            }
+            
+            $file_contents = Storage::disk('private')->get($csv_file->filename);
+            $csv_data = array_map('str_getcsv', explode("\n", trim($file_contents)));
+            $headers = array_shift($csv_data);
 
-		return view(
-			'csv.map',
-			array(
-				'csv_file'        => $csv_file,
-				'headers'         => $csv_file->headers,
-				'mapping_options' => array(
-					'date'        => 'Transaction Date',
-					'amount'      => 'Amount',
-					'description' => 'Description',
-					'recipient'   => 'Recipient/Sender',
-					'currency'    => 'Currency',
-				),
-			)
-		);
-	}
+            // Create entries
+            foreach ($csv_data as $row) {
+                if (empty($row) || count($row) !== count($headers)) {
+                    continue;
+                }
 
-	public function saveMapping( Request $request, $id ) {
-		$csv_file = CsvFile::findOrFail( $id );
+                $row_data = array_combine($headers, $row);
+                $entry_data = [];
 
-		// Save only non-empty mappings
-		foreach ( $request->mappings as $column => $maps_to ) {
-			if ( ! empty( $maps_to ) ) {  // Only create mapping if a value was selected
-				CsvColumnMapping::create(
-					array(
-						'csv_file_id' => $csv_file->id,
-						'column_name' => $column,
-						'maps_to'     => $maps_to,
-					)
-				);
-			}
-		}
+                $columnMappings = $csv_file->columnMappings()
+                    ->where('mapping_type', 'column')
+                    ->pluck('maps_to', 'column_name')
+                    ->toArray();
 
-		// Mark file as mapped
-		$csv_file->update(
-			array(
-				'is_mapped' => true,
-			)
-		);
+                foreach ($columnMappings as $header => $field) {
+                    $value = $this->extractMappedValue($row_data, $columnMappings, $field);
+                    switch ($field) {
+                        case 'date':
+                            $entry_data['transaction_date'] = date('Y-m-d', strtotime($value));
+                            break;
+                        case 'amount':
+                            $entry_data['amount'] = floatval(preg_replace('/[^0-9.-]/', '', $value));
+                            break;
+                        case 'type':
+                            $entry_data['type'] = $value;
+                            break;
+                        case 'description':
+                            $entry_data['description'] = $value;
+                            break;
+                        case 'recipient':
+                            $entry_data['recipient'] = $value;
+                            break;
+                        case 'currency':
+                            $entry_data['currency'] = $value;
+                            break;
+                    }
+                }
 
-		// Now process the actual CSV data with the mappings
-		$this->processWithMapping( $csv_file );
+                if (!isset($entry_data['currency'])) {
+                    $entry_data['currency'] = 'PLN';
+                }
 
-		return redirect()
-			->route( 'dashboard' )
-			->with( 'success', 'CSV mapped and processed successfully' );
-	}
+                $entry_data['csv_file_id'] = $csv_file->id;
+                $entry_data['original_data'] = json_encode($row_data);
+                
+                // Create the entry
+                $entry = CsvEntry::create($entry_data);
 
-	private function processWithMapping( CsvFile $csv_file ) {
-		$mappings = $csv_file->columnMappings->pluck( 'maps_to', 'column_name' )->toArray();
+                // Check if this entry had categories before and restore them
+                $entryKey = md5($entry_data['description'] . '|' . $entry_data['amount']);
+                if (isset($existingEntries[$entryKey])) {
+                    $entry->categories()->attach($existingEntries[$entryKey]);
+                } else {
+                    // If no existing categories, try to find similar entries' categories
+                    $categoryIds = $this->findSimilarEntryCategories($entry_data['description']);
+                    if (!empty($categoryIds)) {
+                        $entry->categories()->attach($categoryIds);
+                    }
+                }
+            }
 
-		$filename = str_contains( $csv_file->filename, 'csv_files/' )
-			? $csv_file->filename
-			: 'csv_files/' . $csv_file->filename;
+            $csv_file->update(['is_mapped' => true]);
+            DB::commit();
 
-		$filepath = storage_path( 'app/private/' . $filename );
+            return redirect()->route('csv.view', $csv_file->id);
 
-		if ( ! file_exists( $filepath ) ) {
-			throw new \Exception( "CSV file not found at: " . $filepath );
-		}
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error saving CSV mapping: ' . $e->getMessage());
+            return back()->withErrors(['error' => 'Failed to save mapping: ' . $e->getMessage()]);
+        }
+    }
 
-		$csv_data = array_map( 'str_getcsv', file( $filepath ) );
-		$headers  = array_shift( $csv_data );
+    /**
+     * Handle the upload of a new CSV file
+     * Route: POST /csv/upload
+     *
+     * @param  Request  $request
+     * @return \Illuminate\Http\RedirectResponse
+     */
+    public function upload(Request $request)
+    {
+        // Validate the uploaded file
+        $request->validate([
+            'csv_file' => 'required|mimes:csv,txt|max:2048',
+        ]);
 
-		foreach ( $csv_data as $row ) {
-			$row_data = array_combine( $headers, $row );
+        try {
+            DB::beginTransaction();
 
-			CsvEntry::create(
-				array(
-					'csv_file_id' => $csv_file->id,
-					'amount'      => $this->extractMappedValue( $row_data, $mappings, 'amount' ),
-					'currency'    => $this->extractMappedValue( $row_data, $mappings, 'currency' ),
-					'transaction_date' => $this->extractMappedValue( $row_data, $mappings, 'date' ),
-					'description' => $this->extractMappedValue( $row_data, $mappings, 'description' ),
-					'recipient' => $this->extractMappedValue( $row_data, $mappings, 'recipient' ),
-					'original_data' => $row_data,
-				)
-			);
-		}
-	}
+            $file = $request->file('csv_file');
+            $filename = $file->store('csv_files', 'private');
 
-	private function extractMappedValue( $row_data, $mappings, $type ) {
-		$column = array_search( $type, $mappings );
-		if ( ! $column ) {
-			return null;
-		}
+            // Create CSV File record
+            $csv_file = CsvFile::create([
+                'filename'          => $filename,
+                'original_filename' => $file->getClientOriginalName(),
+                'is_mapped'         => false,
+            ]);
 
-		$value = $row_data[ $column ];
+            // Extract and store headers
+            if (!Storage::disk('private')->exists($csv_file->filename)) {
+                throw new \Exception('CSV file not found: ' . $csv_file->filename);
+            }
+            
+            $file_contents = Storage::disk('private')->get($csv_file->filename);
+            $csv_data = array_map('str_getcsv', explode("\n", $file_contents));
+            $headers  = array_shift($csv_data);
+            $csv_file->update(['headers' => $headers]);
 
-		switch ( $type ) {
-			case 'date':
-				return \Carbon\Carbon::parse( $value );
-			case 'amount':
-				return floatval( preg_replace( '/[^-0-9.]/', '', $value ) );
-			case 'currency':
-				return strtoupper( trim( $value ) );
-			default:
-				return $value;
-		}
-	}
+            DB::commit();
+
+            return redirect()
+                ->route('csv.map', $csv_file->id)
+                ->with('success', 'Please map the CSV columns');
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return redirect()
+                ->back()
+                ->with('error', 'Error uploading CSV: ' . $e->getMessage());
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Private Helper Methods
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * Find similar entries and their categories
+     *
+     * @param string $description
+     * @return array
+     */
+    private function findSimilarEntryCategories($description)
+    {
+        return CsvEntry::where('description', 'LIKE', '%' . $description . '%')
+            ->whereHas('categories')
+            ->with('categories')
+            ->get()
+            ->pluck('categories')
+            ->flatten()
+            ->unique('id')
+            ->pluck('id')
+            ->toArray();
+    }
+
+    /**
+     * Process CSV file using the saved column mappings
+     *
+     * @param  CsvFile  $csv_file
+     * @throws \Exception
+     */
+    private function processWithMapping(CsvFile $csv_file)
+    {
+        if (!Storage::disk('private')->exists($csv_file->filename)) {
+            throw new \Exception('CSV file not found: ' . $csv_file->filename);
+        }
+        
+        $file_contents = Storage::disk('private')->get($csv_file->filename);
+        $csv_data = array_map('str_getcsv', explode("\n", trim($file_contents)));
+        $headers = array_shift($csv_data);
+
+        // Create entries
+        foreach ($csv_data as $row) {
+            // Skip empty rows
+            if (empty($row) || count($row) !== count($headers)) {
+                continue;
+            }
+
+            $row_data = array_combine($headers, $row);
+            $entry_data = [];
+
+            // Only process column mappings
+            $columnMappings = $csv_file->columnMappings()
+                ->where('mapping_type', 'column')
+                ->pluck('maps_to', 'column_name')
+                ->toArray();
+
+            foreach ($columnMappings as $header => $field) {
+                $value = $this->extractMappedValue($row_data, $columnMappings, $field);
+                switch ($field) {
+                    case 'date':
+                        $entry_data['transaction_date'] = date('Y-m-d', strtotime($value));
+                        break;
+                    case 'amount':
+                        $entry_data['amount'] = floatval(preg_replace('/[^0-9.-]/', '', $value));
+                        break;
+                    case 'type':
+                        $entry_data['type'] = $value;
+                        break;
+                    case 'description':
+                        $entry_data['description'] = $value;
+                        break;
+                    case 'recipient':
+                        $entry_data['recipient'] = $value;
+                        break;
+                    case 'currency':
+                        $entry_data['currency'] = $value;
+                        break;
+                }
+            }
+
+            // Set default currency to PLN if not mapped
+            if (!isset($entry_data['currency'])) {
+                $entry_data['currency'] = 'PLN';
+            }
+
+            $entry_data['csv_file_id'] = $csv_file->id;
+            $entry_data['original_data'] = json_encode($row_data);
+            
+            // Create the entry
+            $entry = CsvEntry::create($entry_data);
+
+            // Find and assign categories from similar entries
+            if (isset($entry_data['description'])) {
+                $categoryIds = $this->findSimilarEntryCategories($entry_data['description']);
+                if (!empty($categoryIds)) {
+                    $entry->categories()->attach($categoryIds);
+                }
+            }
+        }
+    }
+
+    /**
+     * Extract and format values based on mapping type
+     *
+     * @param  array  $row_data
+     * @param  array  $mappings
+     * @param  string  $type
+     *
+     * @return mixed
+     */
+    private function extractMappedValue($row_data, $mappings, $type)
+    {
+        $column = array_search($type, $mappings);
+        if (! $column) {
+            return null;
+        }
+
+        $value = $row_data[$column];
+
+        switch ($type) {
+            case 'date':
+                return \Carbon\Carbon::parse($value);
+            case 'amount':
+                return floatval(preg_replace('/[^-0-9.]/', '', $value));
+            case 'currency':
+                return strtoupper(trim($value));
+            default:
+                return $value;
+        }
+    }
 }

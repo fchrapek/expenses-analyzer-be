@@ -114,3 +114,36 @@ class StringHelper {
     }
 }
 ```
+
+
+## Lavarel naming conventions
+
+// 1. Variables (snake_case)
+$first_name
+$last_name
+$csv_file
+$mapped_columns
+
+// 2. Classes (PascalCase)
+class CsvFile
+class UserProfile
+class PaymentProcessor
+
+// 3. Methods (camelCase)
+public function showProfile()
+public function getUserName()
+public function processPayment()
+
+// 4. Constants (SCREAMING_SNAKE_CASE)
+const MAX_UPLOAD_SIZE = 2048;
+const FILE_TYPES_ALLOWED = ['csv', 'txt'];
+
+// 5. Database Tables (snake_case, plural)
+'csv_files'
+'csv_entries'
+'users'
+
+// 6. Database Columns (snake_case)
+'first_name'
+'last_name'
+'created_at'

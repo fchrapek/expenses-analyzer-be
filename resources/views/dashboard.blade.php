@@ -29,154 +29,128 @@
                     <!-- Files List -->
                     @if(isset($csv_files) && $csv_files->count() > 0)
                         @foreach($csv_files as $csv_file)
-                            <div class="mb-8">
-                                <h3 class="font-bold text-lg mb-2">{{ $csv_file->original_filename }}</h3>
+                            <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg mb-6">
+                                <div class="p-6">
+                                    <h2 class="text-lg font-semibold mb-4">{{ $csv_file->original_filename }}</h2>
 
-                                @if(isset($csv_file->entries[0]))
-                                    <div class="overflow-x-auto">
-                                        <table class="min-w-full bg-white border">
-                                            @php
-                                                // Check which columns have any data
-                                                $hasDate = $csv_file->entries->contains(function($entry) {
-                                                    return !empty($entry->transaction_date);
-                                                });
-                                                $hasDescription = $csv_file->entries->contains(function($entry) {
-                                                    return !empty($entry->description);
-                                                });
-                                                $hasRecipient = $csv_file->entries->contains(function($entry) {
-                                                    return !empty($entry->recipient);
-                                                });
-                                                $hasAmount = $csv_file->entries->contains(function($entry) {
-                                                    return !empty($entry->amount);
-                                                });
-                                            @endphp
+                                    @foreach($csv_file->entries->first()?->getGroupedEntries() ?? [] as $typeGroup)
+                                        <!-- Type Group Header -->
+                                        <div class="bg-gray-100 p-4 mb-4 rounded-lg">
+                                            <h3 class="font-medium text-gray-700 mb-2">
+                                                Type: {{ ucfirst($typeGroup['type']) }}
+                                                <span class="text-sm text-gray-500">
+                                                    (Total: {{ number_format($typeGroup['total_amount'], 2) }})
+                                                </span>
+                                            </h3>
 
-                                            <thead>
-                                                <tr>
-                                                    <th class="border px-4 py-2 bg-gray-100 w-10"></th>
-                                                    @if($hasDate)
-                                                        <th class="border px-4 py-2 bg-gray-100">Date</th>
-                                                    @endif
-                                                    @if($hasDescription)
-                                                        <th class="border px-4 py-2 bg-gray-100">Description</th>
-                                                    @endif
-                                                    @if($hasRecipient)
-                                                        <th class="border px-4 py-2 bg-gray-100">Recipient</th>
-                                                    @endif
-                                                    @if($hasAmount)
-                                                        <th class="border px-4 py-2 bg-gray-100">Amount</th>
-                                                    @endif
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                @foreach($csv_file->entries[0]->getGroupedEntries() as $group)
-                                                    @if(count($group['similar_entries']) > 0)
-                                                        <!-- Grouped Row -->
-                                                        <tr class="group-row hover:bg-gray-50 bg-gray-100">
-                                                            <td class="border px-4 py-2">
-                                                                <button onclick="toggleGroup('group-{{ $group['main_entry']->id }}')"
-                                                                        class="text-blue-500 w-6 h-6 flex items-center justify-center border rounded">
-                                                                    <span class="expand-icon">+</span>
-                                                                    <span class="collapse-icon hidden">−</span>
-                                                                </button>
-                                                            </td>
-                                                            @if($hasDate)
-                                                                <td class="border px-4 py-2">-</td>
-                                                            @endif
-                                                            @if($hasDescription)
-                                                                <td class="border px-4 py-2 font-medium">
-                                                                    Grouped transaction: {{ Str::limit($group['main_entry']->description, 30) }}
-                                                                    <span class="text-gray-500 text-sm ml-2">({{ count($group['similar_entries']) + 1 }} entries)</span>
-                                                                </td>
-                                                            @endif
-                                                            @if($hasRecipient)
-                                                                <td class="border px-4 py-2">{{ $group['main_entry']->recipient }}</td>
-                                                            @endif
-                                                            @if($hasAmount)
-                                                                <td class="border px-4 py-2 font-bold">{{ number_format($group['total_amount'], 2) }}</td>
-                                                            @endif
-                                                        </tr>
-                                                        <!-- Individual Entries (Hidden by Default) -->
-                                                        <tr class="group-{{ $group['main_entry']->id }} hidden">
-                                                            <td colspan="100%" class="p-0">
-                                                                <div class="bg-gray-50">
-                                                                    <table class="w-full">
-                                                                        <!-- Main Entry -->
-                                                                        <tr>
-                                                                            <td class="border-l px-4 py-2 w-10"></td>
-                                                                            @if($hasDate)
-                                                                                <td class="border-l px-4 py-2">{{ $group['main_entry']->transaction_date->format('Y-m-d') }}</td>
-                                                                            @endif
-                                                                            @if($hasDescription)
-                                                                                <td class="border-l px-4 py-2">{{ $group['main_entry']->description }}</td>
-                                                                            @endif
-                                                                            @if($hasRecipient)
-                                                                                <td class="border-l px-4 py-2">{{ $group['main_entry']->recipient }}</td>
-                                                                            @endif
-                                                                            @if($hasAmount)
-                                                                                <td class="border-l border-r px-4 py-2">{{ number_format($group['main_entry']->amount, 2) }}</td>
-                                                                            @endif
-                                                                        </tr>
-                                                                        <!-- Similar Entries -->
-                                                                        @foreach($group['similar_entries'] as $entry)
-                                                                            <tr>
-                                                                                <td class="border-l px-4 py-2 w-10"></td>
-                                                                                @if($hasDate)
-                                                                                    <td class="border-l px-4 py-2">{{ $entry->transaction_date->format('Y-m-d') }}</td>
-                                                                                @endif
-                                                                                @if($hasDescription)
-                                                                                    <td class="border-l px-4 py-2">{{ $entry->description }}</td>
-                                                                                @endif
-                                                                                @if($hasRecipient)
-                                                                                    <td class="border-l px-4 py-2">{{ $entry->recipient }}</td>
-                                                                                @endif
-                                                                                @if($hasAmount)
-                                                                                    <td class="border-l border-r px-4 py-2">{{ number_format($entry->amount, 2) }}</td>
-                                                                                @endif
-                                                                            </tr>
-                                                                        @endforeach
-                                                                    </table>
+                                            <!-- Similarity Groups within Type -->
+                                            @foreach($typeGroup['groups'] as $index => $group)
+                                                <div class="bg-{{ $index % 2 == 0 ? 'gray-50' : 'white' }} p-4 mb-2 rounded">
+                                                    <!-- Group Header -->
+                                                    <div class="border-b border-gray-200 pb-2 mb-3">
+                                                        <div class="flex justify-between items-center">
+                                                            <div class="space-y-2">
+                                                                <div class="font-medium text-gray-700">
+                                                                    <span>{{ $group['main_entry']->recipient }}</span>
+                                                                    <span class="mx-2">•</span>
+                                                                    <span>{{ $group['main_entry']->description }}</span>
                                                                 </div>
-                                                            </td>
-                                                        </tr>
-                                                    @else
-                                                        <!-- Single Entry -->
-                                                        <tr>
-                                                            <td class="border px-4 py-2"></td>
-                                                            @if($hasDate)
-                                                                <td class="border px-4 py-2">{{ $group['main_entry']->transaction_date->format('Y-m-d') }}</td>
-                                                            @endif
-                                                            @if($hasDescription)
-                                                                <td class="border px-4 py-2">{{ $group['main_entry']->description }}</td>
-                                                            @endif
-                                                            @if($hasRecipient)
-                                                                <td class="border px-4 py-2">{{ $group['main_entry']->recipient }}</td>
-                                                            @endif
-                                                            @if($hasAmount)
-                                                                <td class="border px-4 py-2">{{ number_format($group['main_entry']->amount, 2) }}</td>
-                                                            @endif
-                                                        </tr>
-                                                    @endif
-                                                @endforeach
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                @else
-                                    <div class="text-gray-500">
-                                        @if(!$csv_file->is_mapped)
-                                            <a href="{{ route('csv.map', $csv_file->id) }}" class="text-blue-500 hover:underline">
-                                                Map columns for this file
-                                            </a>
-                                        @else
-                                            No entries processed yet
-                                        @endif
-                                    </div>
-                                @endif
+                                                                <div class="flex items-center space-x-2">
+                                                                    @include('partials.category-badge', ['entry' => $group['main_entry']])
+                                                                    <x-category-selector
+                                                                        :entryIds="collect($group['similar_entries'])->pluck('id')->push($group['main_entry']->id)"
+                                                                        :currentCategories="$group['main_entry']->categories"
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                            <div x-data="{
+                                                                groupTotal: {{ $group['total_amount'] }},
+                                                                excludedTotal: {{ $group['main_entry']->shouldExclude() ? $group['main_entry']->amount : 0 }}
+                                                            }"
+                                                                x-on:category-updated.window="
+                                                                    if ($event.detail.category.exclude_from_calculations) {
+                                                                        groupTotal -= entry.amount;
+                                                                        excludedTotal += entry.amount;
+                                                                    }
+                                                                "
+                                                                class="font-medium">
+                                                                Total: <span x-text="new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(groupTotal)"></span>
+                                                                <template x-if="excludedTotal > 0">
+                                                                    <span class="text-sm text-gray-500">
+                                                                        (Excluded: <span x-text="new Intl.NumberFormat('en-US', { minimumFractionDigits: 2 }).format(excludedTotal)"></span>)
+                                                                    </span>
+                                                                </template>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <!-- Individual Entries -->
+                                                    <div class="space-y-2">
+                                                        <!-- Main Entry -->
+                                                        <div class="flex justify-between items-center text-sm pl-4">
+                                                            <div class="flex-1 grid grid-cols-3 gap-4">
+                                                                <span class="text-gray-600">
+                                                                    {{ $group['main_entry']->transaction_date->format('Y-m-d') }}
+                                                                </span>
+                                                                <span class="text-gray-800">{{ $group['main_entry']->recipient }}</span>
+                                                                <span class="text-gray-600">{{ $group['main_entry']->description }}</span>
+                                                            </div>
+                                                            <div class="flex items-center space-x-2">
+                                                                <span class="text-gray-700 {{ $group['main_entry']->getStatusClass() }}">
+                                                                    {{ number_format($group['main_entry']->amount, 2) }}
+                                                                </span>
+                                                                <x-category-selector
+                                                                    :entryIds="[$group['main_entry']->id]"
+                                                                    :currentCategories="$group['main_entry']->categories"
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        <!-- Similar Entries -->
+                                                        @foreach($group['similar_entries'] as $similar)
+                                                            <div class="flex justify-between items-center text-sm pl-4">
+                                                                <div class="flex-1 grid grid-cols-3 gap-4">
+                                                                    <span class="text-gray-600">
+                                                                        {{ $similar->transaction_date->format('Y-m-d') }}
+                                                                    </span>
+                                                                    <span class="text-gray-800">{{ $similar->recipient }}</span>
+                                                                    <span class="text-gray-600">{{ $similar->description }}</span>
+                                                                </div>
+                                                                <div class="flex items-center space-x-2">
+                                                                    <span class="text-gray-700 {{ $similar->getStatusClass() }}">
+                                                                        {{ number_format($similar->amount, 2) }}
+                                                                    </span>
+                                                                    <x-category-selector
+                                                                        :entryIds="[$similar->id]"
+                                                                        :currentCategories="$similar->categories"
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        @endforeach
+                                                    </div>
+                                                </div>
+                                            @endforeach
+                                        </div>
+                                    @endforeach
+                                </div>
                             </div>
                         @endforeach
                     @else
                         <p>No CSV files uploaded yet.</p>
                     @endif
+
+                    @foreach($csv_files as $file)
+                        <tr>
+                            <td>{{ $file->id }}</td>
+                            <td>{{ $file->original_filename }}</td>
+                            <td>
+                                <a href="{{ route('csv.show', $file->id) }}"
+                                    class="text-blue-600 hover:text-blue-800">
+                                    View Details
+                                </a>
+                            </td>
+                        </tr>
+                    @endforeach
                 </div>
             </div>
         </div>
@@ -197,4 +171,100 @@ function toggleGroup(groupClass) {
     expandIcon.classList.toggle('hidden');
     collapseIcon.classList.toggle('hidden');
 }
+</script>
+
+<script>
+document.addEventListener('alpine:init', () => {
+    Alpine.data('categorySelector', ({ entryIds, isGroup, currentCategories = [] }) => ({
+        isOpen: false,
+        categories: [],
+        entryIds: entryIds,
+        isGroup: isGroup,
+        currentCategories: currentCategories,
+        loading: false,
+
+        async init() {
+            // Load categories when component initializes
+            await this.loadCategories();
+        },
+
+        async loadCategories() {
+            try {
+                const response = await fetch('/api/categories');
+                this.categories = await response.json();
+            } catch (error) {
+                console.error('Failed to load categories:', error);
+            }
+        },
+
+        toggle() {
+            this.isOpen = !this.isOpen;
+        },
+
+        close() {
+            this.isOpen = false;
+        },
+
+        async assignCategory(categoryId) {
+            if (this.isGroup && !confirm('Assign this category to all entries in the group?')) {
+                return;
+            }
+
+            this.loading = true;
+            try {
+                const response = await fetch('/assign-category', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                    },
+                    body: JSON.stringify({
+                        entry_ids: this.entryIds,
+                        category_id: categoryId
+                    })
+                });
+
+                if (!response.ok) throw new Error('Failed to assign category');
+
+                // Optimistic UI update
+                this.currentCategories = [this.categories.find(c => c.id === categoryId)];
+                this.close();
+
+                // Trigger a success message
+                Alpine.store('flash').success('Category assigned successfully');
+
+            } catch (error) {
+                console.error('Failed to assign category:', error);
+                Alpine.store('flash').error('Failed to assign category');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        isCategoryAssigned(categoryId) {
+            return this.currentCategories.some(c => c.id === categoryId);
+        }
+    }));
+
+    // Global flash message store
+    Alpine.store('flash', {
+        message: null,
+        type: null,
+        show: false,
+
+        success(message) {
+            this.message = message;
+            this.type = 'success';
+            this.show = true;
+            setTimeout(() => this.show = false, 3000);
+        },
+
+        error(message) {
+            this.message = message;
+            this.type = 'error';
+            this.show = true;
+            setTimeout(() => this.show = false, 3000);
+        }
+    });
+});
 </script>
